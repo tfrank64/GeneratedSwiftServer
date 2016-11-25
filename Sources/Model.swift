@@ -42,7 +42,7 @@ open class Model {
         return updatedProperties
     }
 
-    static func ensureValid(_ properties: [String:Any]) throws {
+    static func ensureRequiredPropertiesExist(_ properties: [String:Any]) throws {
         // NOTE(tunniclm): validate that required properties have been provided
         guard let (_, modelDef) = Model.definitions[String(describing: self)] else {
             // NOTE(tunniclm): Model not found in the definitions dictionary
@@ -68,7 +68,7 @@ open class Model {
                 modelID = try storeType.ID(id)
             }
         }
-        try modelType.ensureValid(properties)
+        try modelType.ensureRequiredPropertiesExist(properties)
         self.properties = modelType.injectDefaults(properties)
         guard let (_, defn) = modelType.definitions[String(describing: modelType)] else {
             throw InternalError("No definition found for model \(modelType)")
@@ -270,7 +270,7 @@ open class Model {
         try self.forEachValidPropertyInJSON(json) { name, value in
             entity[name] = value
         }
-        try ensureValid(entity)
+        try ensureRequiredPropertiesExist(entity)
         let id = try entity["id"].map { try type(of: store as Store).ID($0) }
         try self.create_(id, entity, callback: callback)
     }
@@ -349,6 +349,60 @@ open class Model {
         } catch {
             let storeType = type(of: store as Store)
             throw InternalError("Updating entity (type: \(self), id: \(id), updates: \(entity)) in store \(storeType)", causedBy: error)
+        }
+    }
+
+    // replace
+    //   Replace a model of the matching type and id as defined by the provided JSON and write it to
+    //   the configured Store.
+    //
+    // throws:
+    //   ModelError.requiredPropertyMissing("id") - if the id is missing or empty
+    //   ModelError.extraneousProperty(name) - if the JSON supplies any property not present in the model definition
+    //   ModelError.propertyTypeMismatch(...) - if any JSON property's type fails to match the model definition
+    //   StoreError.idInvalid(id) - if an id is provided and is not compatible with the Store
+    //   InternalError - if there is a logic error
+    // passes to callback:
+    //   resultModel - the updated model, with type matching the type on which create was called.
+    //                 Will be nil if, and only if, there is an error.
+    //   error - the error that occurred, or nil if no error occurred.
+    //           If an error occurs, the model will not be created (exception: if it is an InternalError,
+    //           the model may still be created).
+    //           Error types:
+    //           * StoreError.notFound(id) - if no entity with the provided id was found in the Store
+    //           * StoreError.idConflict(id) - if an id is provided and the id is already in use by another entity
+    //           * StoreError.storeUnavailable(reason) - if the Store is not in a ready state to service queries
+    //           * StoreError.internalError - if there is a logic error
+
+    static func replace(_ id: String?, json: JSON, callback: @escaping (Model?, StoreError?) -> Void) throws {
+        guard let id = id else {
+            throw ModelError.requiredPropertyMissing(name: "id")
+        }
+        var entity: [String: Any] = [:]
+        try self.forEachValidPropertyInJSON(json) { name, value in
+            entity[name] = value
+        }
+        let modelID = try type(of: store as Store).ID(id)
+        try self.replace_(modelID, entity, callback:callback)
+    }
+
+    // Assumes:
+    // * id is compatible with the Store we are using (caller should ensure this)
+    // * type checking of properties has already been performed and found compatible
+    private static func replace_(_ id: ModelID, _ entity: [String:Any], callback: @escaping (Model?, StoreError?) -> Void) throws {
+        do {
+            try store.replace(type: self, id: id, entity: entity) { entity, error in
+                do {
+                    callback(try entity.map({ try self.from(modelDict: $0) }), error)
+                } catch let error as InternalError {
+                    callback(nil, StoreError.internalError(error.message))
+                } catch {
+                    callback(nil, StoreError.internalError(String(describing: error)))
+                }
+            }
+        } catch {
+            let storeType = type(of: store as Store)
+            throw InternalError("Overwriting entity (type: \(self), id: \(id) in store \(storeType)", causedBy: error)
         }
     }
 

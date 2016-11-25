@@ -52,6 +52,25 @@ public class MemoryStore: Store {
         }
     }
 
+    private func updateExistingID(existing existingID: MemoryStoreID, new newID: Any?, type: Model.Type, callback: @escaping EntityCallback) throws -> MemoryStoreID? {
+        if let newID = try newID.map({ try MemoryStoreID($0) }) {
+            if newID.value != existingID.value {
+                // Changing the id of this model
+                if let (_, _) = findOne_(type: type, id: newID) {
+                    // NOTE(tunniclm): The new id must not clash with existing model
+                    callback(nil, .idConflict(newID))
+                    return nil
+                }
+                // NOTE(tunniclm): Update the counter to prevent future clashes of generated ids
+                if newID.value >= nextId {
+                    nextId = newID.value + 1
+                }
+                return newID
+            }
+        }
+        return existingID
+    }
+
     private static func sanitize(entity: [String:Any]) -> [String:Any] {
         var sanitizedEntity = entity
         sanitizedEntity.removeValue(forKey: "_type")
@@ -136,26 +155,32 @@ public class MemoryStore: Store {
         var updatedItem = existing
         MemoryStore.mergeDictionary(&updatedItem, merge: entity)
         updatedItem["_type"] = type
-        updatedItem["id"] = id
-
-        if let newId = try entity["id"].map({ try MemoryStoreID($0) }) {
-            if newId.value != memoryStoreID.value {
-                // NOTE(tunniclm): Changing the id of this model
-                if let (_, _) = findOne_(type: type, id: newId) {
-                    // NOTE(tunniclm): The new id must not clash with existing model
-                    callback(nil, .idConflict(memoryStoreID))
-                    return
-                }
-                // NOTE(tunniclm): Update the counter to prevent future clashes of generated ids
-                if newId.value >= nextId {
-                    nextId = newId.value + 1
-                }
-                updatedItem["id"] = newId
-            }
-        }
+        updatedItem["id"] = try updateExistingID(existing: memoryStoreID, new: entity["id"], type: type, callback: callback)
 
         entities[index] = updatedItem
         callback(MemoryStore.sanitize(entity: updatedItem), nil)
+    }
+
+    public func replace(type: Model.Type, id: ModelID, entity: [String : Any], callback: @escaping EntityCallback) throws {
+        guard let memoryStoreID = id as? MemoryStoreID else {
+            throw StoreError.idInvalid(id)
+        }
+        guard let (_, index) = findOne_(type: type, id: memoryStoreID) else {
+            // NOTE(tunniclm): Only allowed to replace existing models
+            callback(nil, .notFound(memoryStoreID))
+            return
+        }
+
+        var resultEntity = entity
+        resultEntity["_type"] = type
+        guard let newID = try updateExistingID(existing: memoryStoreID, new: entity["id"], type: type, callback: callback) else {
+            // NOTE: Had a StoreError while checking the new id
+            return
+        }
+        resultEntity["id"] = newID
+
+        entities[index] = resultEntity
+        callback(MemoryStore.sanitize(entity: resultEntity), nil)
     }
 
     public func delete(type: Model.Type, id: ModelID, callback: @escaping EntityCallback) throws {
