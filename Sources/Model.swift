@@ -93,19 +93,24 @@ open class Model {
 
     static func loadModels(fromDir url: URL) throws -> [(String, String)] {
         var failures: [(String, String)] = []
-
+        print("fromdir: \(url)")
         let files = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+        print("Files: \(files)")
         
         for file in files.filter({ $0.lastPathComponent.hasSuffix(".json") }) {
             if let data = try? Data(contentsOf: file) {
+                print("Datacount: \(data.count)")
                 do {
                     let modelDefinition = try ModelDefinition(json: JSON(data: data))
+                    print("def: \(modelDefinition.className) and prop: \(modelDefinition.properties)")
                     let modelClassName = "Generated." + modelDefinition.className
                     if let modelClass = NSClassFromString(modelClassName) as? Model.Type {
+                        print("mod: \(modelClass)")
                         definitions[modelDefinition.className] = (modelClass, modelDefinition)
                     } else {
                         failures.append((file.lastPathComponent, "Unable to load class \(modelClassName)"))
                     }
+                    print("classFromString: \(NSClassFromString(modelClassName) as? Model.Type)")
                 } catch ModelDefinition.Error.invalidSchema(let message) {
                     // Failed to define model from file due to invalid schema (see message); skip file.
                     failures.append((file.lastPathComponent, message));
