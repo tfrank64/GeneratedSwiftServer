@@ -382,6 +382,7 @@ open class Model {
         try self.forEachValidPropertyInJSON(json) { name, value in
             entity[name] = value
         }
+        try ensureRequiredPropertiesExist(entity)
         let modelID = try type(of: store as Store).ID(id)
         try self.replace_(modelID, entity, callback:callback)
     }
