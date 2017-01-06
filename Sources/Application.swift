@@ -25,26 +25,35 @@ public class Application {
 
     public let router: Router
 
-    public static func findProjectRoot(from initialSearchPath: String = #file) -> URL? {
+    public static func executableURL() -> URL? {
+        print("in here: \(#function)")
+        var executableURL = Bundle.main.executableURL
+#if os(Linux)
+        if (executableURL == nil) {
+            executableURL = URL(fileURLWithPath: "/proc/self/exe").resolvingSymlinksInPath()
+        }
+#endif
+        print(executableURL)
+        return executableURL
+    }
+
+    public static func defaultSearchDir() -> URL {
+        print("in this method: \(#function)  ----")
+        return Application.executableURL()?.deletingLastPathComponent()
+               ?? URL(fileURLWithPath: #file).deletingLastPathComponent()
+    }
+
+    public static func findProjectRoot(fromDir initialSearchDir: URL = Application.defaultSearchDir()) -> URL? {
+        print("inital: \(initialSearchDir)")
         let fileManager = FileManager()
-
-        let fileURL = URL(fileURLWithPath: initialSearchPath)
-        let directoryURL = fileURL.deletingLastPathComponent()
-
-        var searchDirectory = directoryURL
+        var searchDirectory = initialSearchDir
         while searchDirectory.path != "/" {
             let projectFilePath = searchDirectory.appendingPathComponent(".swiftservergenerator-project").path
             if fileManager.fileExists(atPath: projectFilePath) {
+                print("found: \(projectFilePath)")
                 return searchDirectory
             }
             searchDirectory.deleteLastPathComponent()
-        }
-        
-        // Get path in alternate way, if first way fails.
-        let currentPath = fileManager.currentDirectoryPath
-        let projectFilePath = currentPath + "/.swiftservergenerator-project"
-        if fileManager.fileExists(atPath: projectFilePath) {
-            return URL(fileURLWithPath: currentPath)
         }
         return nil
     }
@@ -72,18 +81,19 @@ public class Application {
         }
 
         if Model.definitions.count == 0 {
-            Log.error("No models were loaded, exiting")
-            exit(1)
+            Log.warning("No models were loaded, no routes will be defined")
         }
 
         // Generate the routes for each model
         for (_, (modelClass, modelDefn)) in Model.definitions {
-            let onePath = "/api/\(modelDefn.name)/:id"
+            let onePath = "/api/\(modelDefn.plural)/:id"
             let allPath = "/api/\(modelDefn.plural)"
 
             Log.info("Defining routes for \(modelDefn.name)")
 
+            Log.info("Defining DELETE \(allPath)")
             router.delete(allPath) { req, res, next in
+                Log.debug("DELETE \(allPath)")
                 do {
                     try modelClass.deleteAll() { error in
                         if let _ = error {
@@ -152,7 +162,7 @@ public class Application {
 
             Log.info("Defining POST \(allPath)")
             router.post(allPath) { req, res, next in
-                Log.debug("POST \(onePath)")
+                Log.debug("POST \(allPath)")
                 guard let contentType = req.headers["Content-Type"],
                       contentType.hasPrefix("application/json") else {
                     res.status(.unsupportedMediaType)
